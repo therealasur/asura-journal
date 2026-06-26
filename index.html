@@ -473,9 +473,6 @@ canvas{max-width:100%;}
   <div class="page-header">
     <div><div class="page-title">Dashboard</div><div class="page-subtitle" id="dash_period_sub">Last 30 days · updated now</div></div>
     <div class="page-actions">
-      <button class="btn" onclick="exportData()">⬇ Export JSON</button>
-      <button class="btn" onclick="document.getElementById('import_file').click()">⬆ Import</button>
-      <input type="file" id="import_file" accept=".json" style="display:none" onchange="importData(this)">
     </div>
   </div>
   <div class="grid-4 mb12">
@@ -1074,25 +1071,7 @@ function forceSyncToCloud() {
   if (window._forceSync) window._forceSync();
 }
 
-// ── Export / Import ──
-function exportData(){
-  try{var blob=new Blob([JSON.stringify(db,null,2)],{type:'application/json'});var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='asura_journal_'+getISO()+'.json';a.click();toast('Exported successfully ✓');}
-  catch(e){toast('Export failed: '+e.message,'error');}
-}
-function importData(inp){
-  var file=inp.files[0];if(!file)return;
-  var r=new FileReader();
-  r.onload=function(e){
-    try{
-      var p=JSON.parse(e.target.result);
-      if(confirm('Replace all current data with imported data?')){
-        db.trades=p.trades||[];db.strategies=p.strategies||[];db.mistakes=p.mistakes||[];db.challenge=p.challenge||{};db.settings=p.settings||{};
-        save();renderDashboard();toast('Data imported ✓');
-      }
-    }catch(ex){toast('Invalid JSON file','error');}
-  };
-  r.readAsText(file);inp.value='';
-}
+
 
 // ── Toast ──
 function toast(msg,type){
