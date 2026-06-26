@@ -670,7 +670,7 @@ canvas{max-width:100%;}
       <label class="toggle"><input type="checkbox" id="s_brokerage" checked><span class="slider-t"></span></label>
     </div>
     <div class="settings-row">
-      <div><div class="settings-row-label">Lot Sizes</div><div class="settings-row-sub" id="lot_size_status_sub">Fallback — NIFTY=65, SENSEX=20, BANKNIFTY=35, FINNIFTY=60 · Connect Dhan to fetch live sizes</div></div>
+      <div><div class="settings-row-label">Lot Sizes</div><div class="settings-row-sub" id="lot_size_status_sub">Fallback — NIFTY=65, SENSEX=20, BANKNIFTY=35, FINNIFTY=60 · Click Refresh to fetch live from Dhan</div></div>
       <button class="btn" onclick="refreshLotSizes()">↻ Refresh Live</button>
     </div>
   </div>
@@ -982,70 +982,77 @@ var LOT_SIZES = {NIFTY:65, SENSEX:20, BANKNIFTY:35, FINNIFTY:60, MIDCPNIFTY:75, 
 
 // ── Dynamic lot size fetch from Dhan scrip master ──
 // Dhan publishes a CSV with all instrument details including lot sizes.
-// We fetch it via the Cloudflare proxy, parse the relevant rows, and
-// update LOT_SIZES live so it stays current even after NSE/BSE changes.
+// Dhan publishes a PUBLIC scrip master CSV — no auth or proxy needed.
+// We fetch it directly, find the lot size for each index, and update LOT_SIZES.
+// URL: https://images.dhan.co/api-data/api-scrip-master.csv
+// Compact CSV columns include: SM_SYMBOL_NAME, SEM_LOT_UNITS, SEM_INSTRUMENT_NAME
 window._lotSizeFetched = false;
 async function fetchLotSizesFromDhan() {
   if (window._lotSizeFetched) return;
-  var token = db.settings && db.settings.dhanToken;
-  var clientId = db.settings && db.settings.dhanCid;
-  if (!token || !clientId) return; // need credentials to use proxy
   try {
-    var PROXY = 'https://dhan-proxy.asurthedropouttrader.workers.dev';
-    // Dhan scrip master endpoint — returns all instrument metadata including lot sizes
-    var r = await fetch(PROXY + '/v2/instruments', {
-      method: 'GET',
-      headers: { 'access-token': token, 'client-id': clientId }
-    });
-    if (!r.ok) return;
+    // Public URL — no credentials needed, CORS allowed by Dhan
+    var CSV_URL = 'https://images.dhan.co/api-data/api-scrip-master.csv';
+    var r = await fetch(CSV_URL);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
     var text = await r.text();
-    // Parse CSV: columns include SYMBOL_NAME and LOT_SIZE
     var lines = text.split('\n');
-    if (lines.length < 2) return;
+    if (lines.length < 2) throw new Error('Empty CSV');
     var headers = lines[0].split(',').map(function(h){ return h.trim().replace(/"/g,''); });
-    var symIdx = headers.indexOf('SEM_TRADING_SYMBOL');
+    // Compact CSV uses SM_SYMBOL_NAME and SEM_LOT_UNITS
+    var symIdx = headers.indexOf('SM_SYMBOL_NAME');
     var lotIdx = headers.indexOf('SEM_LOT_UNITS');
-    var segIdx = headers.indexOf('SEM_SEGMENT');
-    if (symIdx < 0 || lotIdx < 0) return;
-    // Map known index names to our LOT_SIZES keys
-    var symbolMap = {
-      'NIFTY': 'NIFTY', 'BANKNIFTY': 'BANKNIFTY', 'FINNIFTY': 'FINNIFTY',
-      'SENSEX': 'SENSEX', 'MIDCPNIFTY': 'MIDCPNIFTY', 'BANKEX': 'BANKEX'
+    var instIdx = headers.indexOf('SEM_INSTRUMENT_NAME');
+    if (symIdx < 0 || lotIdx < 0) throw new Error('Columns not found: ' + headers.slice(0,10).join(','));
+
+    // Only interested in these index names
+    var targets = {
+      'NIFTY': true, 'BANKNIFTY': true, 'FINNIFTY': true,
+      'SENSEX': true, 'MIDCPNIFTY': true, 'BANKEX': true
     };
     var updated = {};
     lines.slice(1).forEach(function(line) {
       if (!line.trim()) return;
       var cols = line.split(',');
-      var sym = (cols[symIdx] || '').replace(/"/g,'').trim();
+      var sym = (cols[symIdx] || '').replace(/"/g,'').trim().toUpperCase();
       var lot = parseInt((cols[lotIdx] || '').replace(/"/g,'').trim());
-      var seg = segIdx >= 0 ? (cols[segIdx] || '').replace(/"/g,'').trim() : '';
-      // Only pick index options (IDX_W or IDX) segments to get the canonical lot size
-      if (sym && lot > 0 && symbolMap[sym] && !updated[sym] &&
-          (seg === 'IDX_W' || seg === 'IDX' || seg === '' )) {
+      var inst = instIdx >= 0 ? (cols[instIdx] || '').replace(/"/g,'').trim() : '';
+      // Only pick OPTIDX (index options) rows — these have the canonical lot size
+      if (sym && lot > 0 && targets[sym] && !updated[sym] && inst === 'OPTIDX') {
         updated[sym] = lot;
       }
     });
-    // Apply fetched sizes, keeping fallbacks for anything not found
-    Object.keys(updated).forEach(function(k) {
-      LOT_SIZES[symbolMap[k]] = updated[k];
-    });
-    window._lotSizeFetched = true;
-    console.log('Lot sizes updated from Dhan:', updated);
-    updateLotSizeStatusRow();
-    // Update hint label if trade modal is open
-    var inst = document.getElementById('t_inst');
-    if (inst) {
-      var lotHint = document.getElementById('lot_size_hint');
-      if (lotHint) {
-        lotHint.textContent = 'Live lot sizes — NIFTY=' + LOT_SIZES.NIFTY +
-          ', SENSEX=' + LOT_SIZES.SENSEX +
-          ', BANKNIFTY=' + LOT_SIZES.BANKNIFTY +
-          ', FINNIFTY=' + LOT_SIZES.FINNIFTY;
+
+    // If OPTIDX rows not enough, fall back to any row with that symbol
+    lines.slice(1).forEach(function(line) {
+      if (!line.trim()) return;
+      var cols = line.split(',');
+      var sym = (cols[symIdx] || '').replace(/"/g,'').trim().toUpperCase();
+      var lot = parseInt((cols[lotIdx] || '').replace(/"/g,'').trim());
+      if (sym && lot > 0 && targets[sym] && !updated[sym]) {
+        updated[sym] = lot;
       }
-      document.getElementById('t_lot_size').value = window.getLotSize(inst.value);
+    });
+
+    if (!Object.keys(updated).length) throw new Error('No index symbols found in CSV');
+
+    // Apply to LOT_SIZES
+    Object.keys(updated).forEach(function(k) { LOT_SIZES[k] = updated[k]; });
+    window._lotSizeFetched = true;
+    console.log('Lot sizes updated from Dhan public CSV:', updated);
+    updateLotSizeStatusRow();
+    // Update lot size field if trade modal is open
+    var instEl = document.getElementById('t_inst');
+    if (instEl) {
+      var lotHint = document.getElementById('lot_size_hint');
+      if (lotHint) lotHint.textContent = '✓ Live — NIFTY=' + LOT_SIZES.NIFTY +
+        ', SENSEX=' + LOT_SIZES.SENSEX +
+        ', BANKNIFTY=' + LOT_SIZES.BANKNIFTY +
+        ', FINNIFTY=' + LOT_SIZES.FINNIFTY;
+      document.getElementById('t_lot_size').value = window.getLotSize(instEl.value);
     }
   } catch(e) {
-    console.warn('Lot size fetch failed, using fallbacks:', e);
+    console.warn('Lot size fetch failed, using fallback values:', e.message);
+    // Fallback values are already set in LOT_SIZES — no further action needed
   }
 }
 
@@ -1459,7 +1466,7 @@ function saveChallenge(){var s=document.getElementById('ch_start_inp').value,t=d
 // ═══ SETTINGS ═══
 function loadSettings(){var s=db.settings;if(s.dhanToken)document.getElementById('s_dhan_token').value=s.dhanToken;if(s.dhanCid)document.getElementById('s_dhan_cid').value=s.dhanCid;document.getElementById('s_brokerage').checked=s.brokerage!==false;updateThemeLabels();if(s.dhanToken&&s.dhanCid)document.getElementById('dhan_conn_status').innerHTML='<span style="color:var(--green);">✓ Dhan connected</span>';}
 function saveSettings(){db.settings.dhanToken=document.getElementById('s_dhan_token').value.trim();db.settings.dhanCid=document.getElementById('s_dhan_cid').value.trim();db.settings.brokerage=document.getElementById('s_brokerage').checked;save();toast('Settings saved ✓');if(db.settings.dhanToken)document.getElementById('dhan_conn_status').innerHTML='<span style="color:var(--green);">✓ Dhan connected</span>';
-  // Fetch live lot sizes now that credentials are available
+  // Fetch live lot sizes from public Dhan CSV (no credentials needed)
   window._lotSizeFetched = false;
   fetchLotSizesFromDhan();
 }
