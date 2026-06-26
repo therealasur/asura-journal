@@ -895,38 +895,48 @@ function setCloudStatus(state, label) {
 }
 
 // ── Save entire db to Firestore ──
+// IMPORTANT: always read window.db fresh at call time — never capture it at init
 window._saveToCloud = async function() {
   try {
     setCloudStatus('syncing', 'Saving…');
     const bar = document.getElementById('sync_bar');
     if (bar) bar.classList.add('active');
-    // Split screenshots out of trades to avoid Firestore 1MB doc limit
-    // Store trades without screenshots in main doc, screenshots in separate doc
-    const tradesNoScreenshots = window.db.trades.map(t => {
+
+    // Read live db reference — window.db is set by main script
+    const liveDB = window.db;
+    if (!liveDB) { console.warn('_saveToCloud: window.db not ready'); return; }
+
+    const tradesNoScreenshots = (liveDB.trades || []).map(t => {
       const copy = Object.assign({}, t);
       delete copy.screenshots;
       return copy;
     });
     const screenshotsMap = {};
-    window.db.trades.forEach(t => {
+    (liveDB.trades || []).forEach(t => {
       if (t.screenshots && t.screenshots.length) {
         screenshotsMap[t.id] = t.screenshots;
       }
     });
+
+    console.log('[saveToCloud] saving trades:', tradesNoScreenshots.length,
+      'strategies:', (liveDB.strategies||[]).length);
+
     await setDoc(doc(firestore, 'journal', 'main'), {
-      trades: tradesNoScreenshots,
-      strategies: window.db.strategies,
-      mistakes: window.db.mistakes,
-      challenge: window.db.challenge,
-      settings: window.db.settings,
-      lastSaved: new Date().toISOString()
+      trades:     tradesNoScreenshots,
+      strategies: liveDB.strategies || [],
+      mistakes:   liveDB.mistakes   || [],
+      challenge:  liveDB.challenge  || {},
+      settings:   liveDB.settings   || {},
+      lastSaved:  new Date().toISOString()
     });
-    // Save screenshots in chunks (each trade's screenshots as separate doc)
+
+    // Save screenshots separately (each trade's screenshots as a separate doc)
     for (const [tid, shots] of Object.entries(screenshotsMap)) {
       try {
         await setDoc(doc(firestore, 'screenshots', tid), { data: shots });
-      } catch(e) { /* screenshot too large, skip */ }
+      } catch(e) { console.warn('Screenshot save skipped for', tid, e.message); }
     }
+
     setCloudStatus('synced', 'Synced ✓');
     const now = new Date().toLocaleTimeString('en-IN');
     const lastLabel = document.getElementById('last_synced_label');
@@ -987,11 +997,17 @@ window._journalSignOut = function() {
   return signOut(auth);
 };
 
-onAuthStateChanged(auth, function(user) {
+onAuthStateChanged(auth, async function(user) {
   var ls = document.getElementById('lock_screen');
   if (user) {
     if (ls) ls.classList.add('hidden');
-    if (!window._appInited) { window._appInited = true; initApp(); }
+    // Only init once — and only AFTER Firebase module functions are attached to window
+    if (!window._appInited) {
+      window._appInited = true;
+      // Small tick to ensure all window._ functions are registered before initApp runs
+      await new Promise(function(r){ setTimeout(r, 0); });
+      initApp();
+    }
   } else {
     if (ls) ls.classList.remove('hidden');
     var emailEl = document.getElementById('lock_email');
@@ -1502,32 +1518,56 @@ function resetAllData(){if(!confirm('DELETE ALL data?'))return;if(!confirm('Are 
 
 // ═══ APP INIT ═══
 async function initApp() {
-  if (_appInited) return;
-  _appInited = true;
+  if (_appInited && window._appInitDone) return;
+  window._appInitDone = true;
   initTheme();
   initCalendar();
-  // Try loading from cloud first, fall back to localStorage
+
+  // Always try cloud first — _loadFromCloud is guaranteed ready because
+  // initApp is only called from onAuthStateChanged after a setTimeout(0) tick
   var cloudLoaded = false;
   if (window._loadFromCloud) {
     cloudLoaded = await window._loadFromCloud();
+    console.log('[initApp] cloudLoaded:', cloudLoaded, 'trades:', db.trades.length);
   }
+
   if (!cloudLoaded) {
     // Fallback: load from localStorage
     try {
       var r = localStorage.getItem('asura_journal_v5');
-      if (r) { var p = JSON.parse(r); db.trades=p.trades||[];db.strategies=p.strategies||[];db.mistakes=p.mistakes||[];db.challenge=p.challenge||{};db.settings=p.settings||{}; }
+      if (r) {
+        var p = JSON.parse(r);
+        db.trades     = p.trades     || [];
+        db.strategies = p.strategies || [];
+        db.mistakes   = p.mistakes   || [];
+        db.challenge  = p.challenge  || {};
+        db.settings   = p.settings   || {};
+      }
     } catch(e) {}
     // Migrate from v4
     if (!db.trades.length) {
       try {
         var old = localStorage.getItem('asura_journal_v4');
-        if (old) { var p4=JSON.parse(old); if(p4.trades&&p4.trades.length){db.trades=p4.trades;db.strategies=p4.strategies||[];db.mistakes=p4.mistakes||[];db.challenge=p4.challenge||{};db.settings=p4.settings||{};db.trades.forEach(function(t){if(!t.screenshots)t.screenshots=[];if(!t.lotSize)t.lotSize=getLotSize(t.inst);});save();toast('Migrated '+p4.trades.length+' trades from v4 ✓','info');}}
+        if (old) {
+          var p4 = JSON.parse(old);
+          if (p4.trades && p4.trades.length) {
+            db.trades = p4.trades; db.strategies = p4.strategies || [];
+            db.mistakes = p4.mistakes || []; db.challenge = p4.challenge || {};
+            db.settings = p4.settings || {};
+            db.trades.forEach(function(t){ if(!t.screenshots)t.screenshots=[];if(!t.lotSize)t.lotSize=getLotSize(t.inst); });
+            save(); toast('Migrated '+p4.trades.length+' trades from v4 ✓','info');
+          }
+        }
       } catch(e) {}
     }
   }
+
+  // Apply lot sizes to all trades (handles old records without lotSize)
+  db.trades.forEach(function(t){ if(!t.lotSize) t.lotSize = getLotSize(t.inst); });
+
   populateStrategyDropdowns();
   renderDashboard();
-  // Register service worker
+
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/asura-journal/sw.js').catch(function(){});
   }
@@ -1535,14 +1575,8 @@ async function initApp() {
 
 // ── Boot ──
 window.addEventListener('load', function() {
-  // If Firebase module loaded, wait for it; otherwise boot directly
-  if (window._firebaseReady) {
-    checkLock();
-  } else {
-    window.addEventListener('firebase_ready', function() { checkLock(); });
-    // Safety timeout — if Firebase fails to load in 4s, still show the app
-    setTimeout(function() { if (!_appInited) checkLock(); }, 4000);
-  }
+  // Firebase onAuthStateChanged handles initApp — nothing to do here
+  // The lock screen is shown by default; Firebase auth will hide it when ready
 });
 
 window.addEventListener('resize', function(){
