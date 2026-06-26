@@ -366,6 +366,7 @@ canvas{max-width:100%;}
   .grid-2{grid-template-columns:1fr;}
   .page{padding:12px;}
   .mob-menu-btn{display:flex;}
+  .header-theme-toggle{display:none !important;}
 }
 </style>
 </head>
@@ -408,6 +409,15 @@ canvas{max-width:100%;}
     <div class="nav-item" onclick="goPage('challenge')"><span class="nav-icon">🏆</span>Challenge</div>
     <div class="nav-item" onclick="goPage('settings')"><span class="nav-icon">⚙️</span>Settings</div>
   </div>
+  <div class="sidebar-bottom">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 6px;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span id="sb_theme_icon" style="font-size:14px;">🌙</span>
+        <span id="sb_theme_label" style="font-size:12px;color:var(--text2);font-weight:600;">Dark Mode</span>
+      </div>
+      <label class="toggle" style="margin:0;"><input type="checkbox" id="sb_theme_chk" onchange="toggleThemeFromSidebar()"><span class="slider-t"></span></label>
+    </div>
+  </div>
 </div>
 
 <!-- Mobile sidebar overlay -->
@@ -428,8 +438,8 @@ canvas{max-width:100%;}
       <option value="0">All Time</option>
     </select>
     <button class="btn" onclick="syncDhan()" id="sync_btn">⚡ Sync Dhan</button>
-    <div style="width:1px;height:24px;background:var(--border2);margin:0 4px;"></div>
-    <div style="display:flex;align-items:center;gap:7px;padding:5px 10px;border-radius:var(--radius-sm);background:var(--bg3);border:1px solid var(--border2);">
+    <div style="width:1px;height:24px;background:var(--border2);margin:0 4px;" class="header-theme-toggle"></div>
+    <div class="header-theme-toggle" style="display:flex;align-items:center;gap:7px;padding:5px 10px;border-radius:var(--radius-sm);background:var(--bg3);border:1px solid var(--border2);">
       <span id="theme_icon" style="font-size:13px;">🌙</span>
       <span id="theme_label" style="font-size:11px;color:var(--text2);font-weight:600;">Dark</span>
       <label class="toggle" style="margin:0;"><input type="checkbox" id="theme_chk" onchange="toggleTheme()"><span class="slider-t"></span></label>
@@ -1102,9 +1112,21 @@ function toggleTheme(){
   try{localStorage.setItem('asura_theme',isLight?'light':'dark');}catch(e){}
   setTimeout(function(){if(currentPage==='dashboard')renderDashboard();else if(currentPage==='reports')renderReports();else if(currentPage==='challenge')renderChallenge();},60);
 }
+function toggleThemeFromSidebar(){
+  var sb=document.getElementById('sb_theme_chk');
+  isLight=sb.checked;
+  document.getElementById('theme_chk').checked=isLight;
+  document.body.classList.toggle('light',isLight);
+  updateThemeLabels();
+  try{localStorage.setItem('asura_theme',isLight?'light':'dark');}catch(e){}
+  setTimeout(function(){if(currentPage==='dashboard')renderDashboard();else if(currentPage==='reports')renderReports();else if(currentPage==='challenge')renderChallenge();},60);
+}
 function updateThemeLabels(){
   var icon=document.getElementById('theme_icon');var label=document.getElementById('theme_label');
   if(icon)icon.textContent=isLight?'☀️':'🌙';if(label)label.textContent=isLight?'Light':'Dark';
+  // sync sidebar toggle
+  var sb=document.getElementById('sb_theme_chk');var sbi=document.getElementById('sb_theme_icon');var sbl=document.getElementById('sb_theme_label');
+  if(sb)sb.checked=isLight;if(sbi)sbi.textContent=isLight?'☀️':'🌙';if(sbl)sbl.textContent=isLight?'Light Mode':'Dark Mode';
   var sdm=document.getElementById('s_dark_mode');var stl=document.getElementById('settings_theme_label');var sts=document.getElementById('settings_theme_sub');
   if(sdm)sdm.checked=!isLight;if(stl)stl.textContent=isLight?'Light Mode Active':'Dark Mode Active';if(sts)sts.textContent=isLight?'Currently using light theme':'Currently using dark theme';
 }
