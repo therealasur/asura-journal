@@ -666,6 +666,10 @@ canvas{max-width:100%;}
       <div><div class="settings-row-label">Enable Brokerage Deduction</div><div class="settings-row-sub">Deduct ~₹40/trade from P&L (Dhan F&O)</div></div>
       <label class="toggle"><input type="checkbox" id="s_brokerage" checked><span class="slider-t"></span></label>
     </div>
+    <div class="settings-row">
+      <div><div class="settings-row-label">Lot Sizes</div><div class="settings-row-sub" id="lot_size_status_sub">Fallback — NIFTY=65, SENSEX=20, BANKNIFTY=35, FINNIFTY=60 · Connect Dhan to fetch live sizes</div></div>
+      <button class="btn" onclick="refreshLotSizes()">↻ Refresh Live</button>
+    </div>
   </div>
   <div class="settings-section">
     <div class="settings-title">☁️ Cloud Sync</div>
@@ -713,7 +717,7 @@ canvas{max-width:100%;}
       <div class="field"><label>Lots</label><input type="number" id="t_lots" placeholder="1" min="1" value="1" oninput="calcPnL()"></div>
       <div class="field"><label>Lot Size (units/lot)</label><input type="number" id="t_lot_size" placeholder="Auto" min="1" oninput="calcPnL()"></div>
     </div>
-    <div style="font-size:10px;color:var(--text3);margin-top:-6px;margin-bottom:8px;" id="lot_size_hint">Lot size auto-filled: NIFTY=65, SENSEX=10, BANKNIFTY=35, FINNIFTY=65</div>
+    <div style="font-size:10px;color:var(--text3);margin-top:-6px;margin-bottom:8px;" id="lot_size_hint">Lot size auto-filled: NIFTY=65, SENSEX=20, BANKNIFTY=35, FINNIFTY=60</div>
     <div class="form-section-title">Entry &amp; Exit</div>
     <div class="form-grid-3">
       <div class="field"><label>Entry Date</label><input type="date" id="t_date"></div>
@@ -969,7 +973,79 @@ var emotionEntry = '', emotionExit = '';
 var screenshotsData = [];
 var editingTradeId = null;
 var currentReportTab = 'performance';
-var LOT_SIZES = {NIFTY:65, SENSEX:10, BANKNIFTY:35, FINNIFTY:65, STOCK:1, FUTURES:1};
+// Fallback lot sizes (used if Dhan fetch fails or before fetch completes)
+// Updated: SENSEX=20, FINNIFTY=60 per NSE/BSE circular
+var LOT_SIZES = {NIFTY:65, SENSEX:20, BANKNIFTY:35, FINNIFTY:60, MIDCPNIFTY:75, STOCK:1, FUTURES:1};
+
+// ── Dynamic lot size fetch from Dhan scrip master ──
+// Dhan publishes a CSV with all instrument details including lot sizes.
+// We fetch it via the Cloudflare proxy, parse the relevant rows, and
+// update LOT_SIZES live so it stays current even after NSE/BSE changes.
+window._lotSizeFetched = false;
+async function fetchLotSizesFromDhan() {
+  if (window._lotSizeFetched) return;
+  var token = db.settings && db.settings.dhanToken;
+  var clientId = db.settings && db.settings.dhanCid;
+  if (!token || !clientId) return; // need credentials to use proxy
+  try {
+    var PROXY = 'https://dhan-proxy.asurthedropouttrader.workers.dev';
+    // Dhan scrip master endpoint — returns all instrument metadata including lot sizes
+    var r = await fetch(PROXY + '/v2/instruments', {
+      method: 'GET',
+      headers: { 'access-token': token, 'client-id': clientId }
+    });
+    if (!r.ok) return;
+    var text = await r.text();
+    // Parse CSV: columns include SYMBOL_NAME and LOT_SIZE
+    var lines = text.split('\n');
+    if (lines.length < 2) return;
+    var headers = lines[0].split(',').map(function(h){ return h.trim().replace(/"/g,''); });
+    var symIdx = headers.indexOf('SEM_TRADING_SYMBOL');
+    var lotIdx = headers.indexOf('SEM_LOT_UNITS');
+    var segIdx = headers.indexOf('SEM_SEGMENT');
+    if (symIdx < 0 || lotIdx < 0) return;
+    // Map known index names to our LOT_SIZES keys
+    var symbolMap = {
+      'NIFTY': 'NIFTY', 'BANKNIFTY': 'BANKNIFTY', 'FINNIFTY': 'FINNIFTY',
+      'SENSEX': 'SENSEX', 'MIDCPNIFTY': 'MIDCPNIFTY', 'BANKEX': 'BANKEX'
+    };
+    var updated = {};
+    lines.slice(1).forEach(function(line) {
+      if (!line.trim()) return;
+      var cols = line.split(',');
+      var sym = (cols[symIdx] || '').replace(/"/g,'').trim();
+      var lot = parseInt((cols[lotIdx] || '').replace(/"/g,'').trim());
+      var seg = segIdx >= 0 ? (cols[segIdx] || '').replace(/"/g,'').trim() : '';
+      // Only pick index options (IDX_W or IDX) segments to get the canonical lot size
+      if (sym && lot > 0 && symbolMap[sym] && !updated[sym] &&
+          (seg === 'IDX_W' || seg === 'IDX' || seg === '' )) {
+        updated[sym] = lot;
+      }
+    });
+    // Apply fetched sizes, keeping fallbacks for anything not found
+    Object.keys(updated).forEach(function(k) {
+      LOT_SIZES[symbolMap[k]] = updated[k];
+    });
+    window._lotSizeFetched = true;
+    console.log('Lot sizes updated from Dhan:', updated);
+    updateLotSizeStatusRow();
+    // Update hint label if trade modal is open
+    var inst = document.getElementById('t_inst');
+    if (inst) {
+      var lotHint = document.getElementById('lot_size_hint');
+      if (lotHint) {
+        lotHint.textContent = 'Live lot sizes — NIFTY=' + LOT_SIZES.NIFTY +
+          ', SENSEX=' + LOT_SIZES.SENSEX +
+          ', BANKNIFTY=' + LOT_SIZES.BANKNIFTY +
+          ', FINNIFTY=' + LOT_SIZES.FINNIFTY;
+      }
+      document.getElementById('t_lot_size').value = window.getLotSize(inst.value);
+    }
+  } catch(e) {
+    console.warn('Lot size fetch failed, using fallbacks:', e);
+  }
+}
+
 var _appInited = false;
 var _cloudReady = false;
 
@@ -982,6 +1058,7 @@ function getISO(){return new Date().toISOString().split('T')[0];}
 function daysLeft(d){var e=new Date(d),n=new Date();return Math.max(0,Math.ceil((e-n)/86400000));}
 function timeToMin(t){if(!t)return 0;var p=t.split(':');return parseInt(p[0])*60+parseInt(p[1]||0);}
 window.getLotSize = function(inst){return LOT_SIZES[inst]||1;};
+var getLotSize = window.getLotSize;
 
 // ── Save / Load ──
 function save() {
@@ -1378,7 +1455,38 @@ function saveChallenge(){var s=document.getElementById('ch_start_inp').value,t=d
 
 // ═══ SETTINGS ═══
 function loadSettings(){var s=db.settings;if(s.dhanToken)document.getElementById('s_dhan_token').value=s.dhanToken;if(s.dhanCid)document.getElementById('s_dhan_cid').value=s.dhanCid;document.getElementById('s_brokerage').checked=s.brokerage!==false;updateThemeLabels();if(s.dhanToken&&s.dhanCid)document.getElementById('dhan_conn_status').innerHTML='<span style="color:var(--green);">✓ Dhan connected</span>';}
-function saveSettings(){db.settings.dhanToken=document.getElementById('s_dhan_token').value.trim();db.settings.dhanCid=document.getElementById('s_dhan_cid').value.trim();db.settings.brokerage=document.getElementById('s_brokerage').checked;save();toast('Settings saved ✓');if(db.settings.dhanToken)document.getElementById('dhan_conn_status').innerHTML='<span style="color:var(--green);">✓ Dhan connected</span>';}
+function saveSettings(){db.settings.dhanToken=document.getElementById('s_dhan_token').value.trim();db.settings.dhanCid=document.getElementById('s_dhan_cid').value.trim();db.settings.brokerage=document.getElementById('s_brokerage').checked;save();toast('Settings saved ✓');if(db.settings.dhanToken)document.getElementById('dhan_conn_status').innerHTML='<span style="color:var(--green);">✓ Dhan connected</span>';
+  // Fetch live lot sizes now that credentials are available
+  window._lotSizeFetched = false;
+  fetchLotSizesFromDhan();
+}
+
+function updateLotSizeStatusRow() {
+  var el = document.getElementById('lot_size_status_sub');
+  if (!el) return;
+  if (window._lotSizeFetched) {
+    el.textContent = '✓ Live from Dhan — NIFTY=' + LOT_SIZES.NIFTY +
+      ', SENSEX=' + LOT_SIZES.SENSEX +
+      ', BANKNIFTY=' + LOT_SIZES.BANKNIFTY +
+      ', FINNIFTY=' + LOT_SIZES.FINNIFTY +
+      ', MIDCPNIFTY=' + (LOT_SIZES.MIDCPNIFTY || '—');
+    el.style.color = 'var(--green)';
+  } else {
+    el.textContent = 'Fallback — NIFTY=' + LOT_SIZES.NIFTY +
+      ', SENSEX=' + LOT_SIZES.SENSEX +
+      ', BANKNIFTY=' + LOT_SIZES.BANKNIFTY +
+      ', FINNIFTY=' + LOT_SIZES.FINNIFTY +
+      ' · Connect Dhan to fetch live sizes';
+    el.style.color = '';
+  }
+}
+
+async function refreshLotSizes() {
+  window._lotSizeFetched = false;
+  await fetchLotSizesFromDhan();
+  updateLotSizeStatusRow();
+  toast(window._lotSizeFetched ? 'Lot sizes updated live from Dhan ✓' : 'Using fallback sizes (add Dhan credentials first)', window._lotSizeFetched ? 'success' : 'info');
+}
 function resetAllData(){if(!confirm('DELETE ALL data?'))return;if(!confirm('Are you absolutely sure? This cannot be undone.'))return;db={trades:[],strategies:[],mistakes:[],challenge:{},settings:{}};save();toast('All data cleared','error');renderDashboard();}
 
 // ═══ APP INIT ═══
@@ -1408,6 +1516,8 @@ async function initApp() {
   }
   populateStrategyDropdowns();
   renderDashboard();
+  // Attempt live lot size fetch if credentials available
+  fetchLotSizesFromDhan();
   // Register service worker
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/asura-journal/sw.js').catch(function(){});
