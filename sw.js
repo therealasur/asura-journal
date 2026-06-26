@@ -1,5 +1,5 @@
-/* ASURA Trade Journal — Service Worker v1 */
-const CACHE = 'asura-journal-v1';
+/* ASURA Trade Journal — Service Worker v2 */
+const CACHE = 'asura-journal-v2';
 const ASSETS = [
   '/asura-journal/',
   '/asura-journal/index.html',
@@ -32,6 +32,19 @@ self.addEventListener('fetch', e => {
       url.includes('api.dhan') ||
       url.includes('fonts.gstatic') ||
       url.includes('fonts.googleapis')) {
+    return;
+  }
+  // Network-first for HTML so updates always get through
+  if (url.endsWith('.html') || url.endsWith('/') || url.includes('/asura-journal/') && !url.includes('.')) {
+    e.respondWith(
+      fetch(e.request)
+        .then(r => {
+          const clone = r.clone();
+          caches.open(CACHE).then(c => c.put(e.request, clone));
+          return r;
+        })
+        .catch(() => caches.match(e.request))
+    );
     return;
   }
   e.respondWith(
