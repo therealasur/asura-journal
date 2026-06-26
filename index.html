@@ -350,7 +350,23 @@ canvas{max-width:100%;}
 @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.3;}}
 
 @media(max-width:960px){.grid-4{grid-template-columns:1fr 1fr;}.grid-3{grid-template-columns:1fr 1fr;}}
-@media(max-width:600px){:root{--sidebar:0px;}.sidebar{transform:translateX(-220px);}.top-header{left:0;}.main-content{margin-left:0;}.grid-4{grid-template-columns:1fr 1fr;}.grid-2{grid-template-columns:1fr;}.page{padding:12px;}}
+/* Mobile sidebar overlay */
+.sidebar-overlay{display:none;position:fixed;inset:0;z-index:199;background:rgba(0,0,0,0.6);backdrop-filter:blur(2px);}
+.sidebar-overlay.visible{display:block;}
+/* Hamburger button */
+.mob-menu-btn{display:none;width:36px;height:36px;align-items:center;justify-content:center;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--radius-sm);cursor:pointer;font-size:16px;color:var(--text);flex-shrink:0;}
+@media(max-width:600px){
+  :root{--sidebar:0px;}
+  .sidebar{transform:translateX(-220px);width:220px;}
+  .sidebar.mob-open{transform:translateX(0);}
+  .top-header{left:0;justify-content:space-between;padding:0 14px;}
+  .top-header .header-actions{gap:6px;}
+  .main-content{margin-left:0;}
+  .grid-4{grid-template-columns:1fr 1fr;}
+  .grid-2{grid-template-columns:1fr;}
+  .page{padding:12px;}
+  .mob-menu-btn{display:flex;}
+}
 </style>
 </head>
 <body>
@@ -394,8 +410,12 @@ canvas{max-width:100%;}
   </div>
 </div>
 
+<!-- Mobile sidebar overlay -->
+<div class="sidebar-overlay" id="mob_overlay" onclick="closeMobSidebar()"></div>
+
 <!-- HEADER -->
 <header class="top-header">
+  <button class="mob-menu-btn" onclick="openMobSidebar()" title="Menu">☰</button>
   <div class="header-actions">
     <div class="cloud-status" id="cloud_status">
       <div class="cloud-dot" id="cloud_dot"></div>
@@ -932,6 +952,18 @@ window.dispatchEvent(new Event('firebase_ready'));
    ASURA TRADE JOURNAL v5 — Firebase + PWA + Password Lock
 ════════════════════════════════════════════ */
 
+// ── MOBILE SIDEBAR ──
+function openMobSidebar() {
+  document.querySelector('.sidebar').classList.add('mob-open');
+  document.getElementById('mob_overlay').classList.add('visible');
+  document.body.style.overflow = 'hidden';
+}
+function closeMobSidebar() {
+  document.querySelector('.sidebar').classList.remove('mob-open');
+  document.getElementById('mob_overlay').classList.remove('visible');
+  document.body.style.overflow = '';
+}
+
 // ── PASSWORD LOCK ──
 var JOURNAL_PASSWORD = 'Qwerty@787898';
 var LOCK_KEY = 'asura_unlocked_v5';
@@ -1048,6 +1080,7 @@ function goPage(pg){
   var el=document.getElementById('page_'+pg);if(el)el.classList.add('active');
   document.querySelectorAll('.nav-item').forEach(function(n){if((n.getAttribute('onclick')||'').includes("'"+pg+"'"))n.classList.add('active');});
   currentPage=pg;refreshPage(pg);
+  closeMobSidebar(); // auto-close sidebar on mobile after nav
 }
 function refreshPage(pg){
   if(pg==='dashboard')renderDashboard();
