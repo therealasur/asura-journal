@@ -410,10 +410,35 @@ canvas{max-width:100%;}
     <div class="lock-logo">A</div>
     <div class="lock-title">ASURA Journal</div>
     <div class="lock-sub">Private Access Only</div>
-    <input type="email" class="lock-input" id="lock_email" placeholder="Email" autocomplete="email" onkeydown="if(event.key==='Enter')tryUnlock()" style="letter-spacing:normal;margin-bottom:10px;">
-    <input type="password" class="lock-input" id="lock_pass" placeholder="Password" autocomplete="current-password" onkeydown="if(event.key==='Enter')tryUnlock()">
-    <button class="lock-btn" id="lock_btn" onclick="tryUnlock()">Sign In</button>
-    <div class="lock-err" id="lock_err"></div>
+
+    <!-- Step 1: Email entry -->
+    <div id="lock_step1">
+      <input type="email" class="lock-input" id="lock_email" placeholder="your@email.com" autocomplete="email" onkeydown="if(event.key==='Enter')lockNextStep()" style="letter-spacing:normal;margin-bottom:12px;">
+      <button class="lock-btn" id="lock_next_btn" onclick="lockNextStep()">Continue →</button>
+      <div class="lock-err" id="lock_err_step1"></div>
+    </div>
+
+    <!-- Step 2: Choose method -->
+    <div id="lock_step2" style="display:none;">
+      <div style="font-size:12px;color:#9898a8;margin-bottom:14px;word-break:break-all;" id="lock_email_display"></div>
+      <!-- Password sign-in -->
+      <input type="password" class="lock-input" id="lock_pass" placeholder="Password" autocomplete="current-password" onkeydown="if(event.key==='Enter')tryUnlock()" style="letter-spacing:normal;margin-bottom:10px;">
+      <button class="lock-btn" id="lock_btn" onclick="tryUnlock()" style="margin-bottom:10px;">Sign In</button>
+      <!-- Divider -->
+      <div style="display:flex;align-items:center;gap:10px;margin:4px 0 10px;">
+        <div style="flex:1;height:1px;background:rgba(255,255,255,0.07);"></div>
+        <span style="font-size:10px;color:#4a4a5e;text-transform:uppercase;letter-spacing:0.6px;">or</span>
+        <div style="flex:1;height:1px;background:rgba(255,255,255,0.07);"></div>
+      </div>
+      <!-- OTP magic link -->
+      <button class="lock-btn" id="lock_otp_btn" onclick="sendOtpLink()" style="background:transparent;border:1px solid rgba(0,201,160,0.3);color:#00c9a0;margin-bottom:6px;">📧 Send Sign-In Link</button>
+      <div id="lock_otp_sent" style="display:none;font-size:11px;color:#00c9a0;margin-top:6px;line-height:1.5;">
+        ✓ Link sent! Check your email and tap the link to sign in.<br>
+        <span style="color:#4a4a5e;font-size:10px;">You can close this tab after tapping the link.</span>
+      </div>
+      <button onclick="lockBack()" style="background:none;border:none;color:#4a4a5e;font-size:11px;cursor:pointer;margin-top:10px;font-family:inherit;">← Use different email</button>
+      <div class="lock-err" id="lock_err"></div>
+    </div>
   </div>
 </div>
 
@@ -881,7 +906,7 @@ canvas{max-width:100%;}
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyDDu28DwdZvkW36GeiYCu62msVzVxIl7uE",
@@ -1000,14 +1025,50 @@ window._forceSync = async function() {
 };
 
 // ── Firebase Auth wiring ──
+const ACTION_CODE_SETTINGS = {
+  url: 'https://therealasur.github.io/asura-journal/',
+  handleCodeInApp: true
+};
+
 window._journalSignIn = function(email, pass) {
   return signInWithEmailAndPassword(auth, email, pass)
     .then(() => ({ ok: true }))
     .catch(e => ({ ok: false, msg: 'Incorrect email or password.' }));
 };
+
+window._sendOtpLink = function(email) {
+  return sendSignInLinkToEmail(auth, email, ACTION_CODE_SETTINGS)
+    .then(() => {
+      window.localStorage.setItem('asura_otp_email', email);
+      return { ok: true };
+    })
+    .catch(e => ({ ok: false, msg: e.message || 'Failed to send link.' }));
+};
+
 window._journalSignOut = function() {
   return signOut(auth);
 };
+
+// ── Handle magic link redirect on page load ──
+(async function() {
+  if (isSignInWithEmailLink(auth, window.location.href)) {
+    var email = window.localStorage.getItem('asura_otp_email');
+    if (!email) {
+      // Ask user for email if opened on different device
+      email = window.prompt('Please enter your email to complete sign-in:');
+    }
+    if (email) {
+      try {
+        await signInWithEmailLink(auth, email, window.location.href);
+        window.localStorage.removeItem('asura_otp_email');
+        // Clean up URL
+        window.history.replaceState({}, document.title, window.location.pathname);
+      } catch(e) {
+        console.warn('Email link sign-in failed:', e);
+      }
+    }
+  }
+})();
 
 onAuthStateChanged(auth, async function(user) {
   var ls = document.getElementById('lock_screen');
@@ -1022,6 +1083,11 @@ onAuthStateChanged(auth, async function(user) {
     }
   } else {
     if (ls) ls.classList.remove('hidden');
+    // Reset to step 1 on sign-out
+    var s1 = document.getElementById('lock_step1');
+    var s2 = document.getElementById('lock_step2');
+    if (s1) s1.style.display = 'block';
+    if (s2) s2.style.display = 'none';
     var emailEl = document.getElementById('lock_email');
     if (emailEl) setTimeout(function(){ emailEl.focus(); }, 200);
   }
@@ -1049,12 +1115,30 @@ function closeMobSidebar() {
 }
 
 // ── FIREBASE AUTH LOCK ──
+function lockNextStep() {
+  var email = (document.getElementById('lock_email').value || '').trim();
+  var err = document.getElementById('lock_err_step1');
+  if (!email || !email.includes('@')) { err.textContent = 'Enter a valid email.'; return; }
+  err.textContent = '';
+  document.getElementById('lock_email_display').textContent = email;
+  document.getElementById('lock_step1').style.display = 'none';
+  document.getElementById('lock_step2').style.display = 'block';
+  setTimeout(function(){ document.getElementById('lock_pass').focus(); }, 100);
+}
+function lockBack() {
+  document.getElementById('lock_step2').style.display = 'none';
+  document.getElementById('lock_step1').style.display = 'block';
+  document.getElementById('lock_err').textContent = '';
+  document.getElementById('lock_otp_sent').style.display = 'none';
+  document.getElementById('lock_otp_btn').style.display = '';
+  setTimeout(function(){ document.getElementById('lock_email').focus(); }, 100);
+}
 function tryUnlock() {
   var email = (document.getElementById('lock_email').value || '').trim();
   var pass  = (document.getElementById('lock_pass').value || '').trim();
   var err   = document.getElementById('lock_err');
   var btn   = document.getElementById('lock_btn');
-  if (!email || !pass) { err.textContent = 'Enter your email and password.'; return; }
+  if (!email || !pass) { err.textContent = 'Enter email and password.'; return; }
   btn.disabled = true; btn.textContent = 'Signing in…'; err.textContent = '';
   function doSignIn() {
     if (window._journalSignIn) {
@@ -1064,18 +1148,36 @@ function tryUnlock() {
           err.textContent = res.msg || 'Sign-in failed.';
           document.getElementById('lock_pass').value = '';
         }
-        // Success: onAuthStateChanged handles hiding lock screen automatically
       });
     } else { setTimeout(doSignIn, 300); }
   }
   doSignIn();
 }
-
+function sendOtpLink() {
+  var email = (document.getElementById('lock_email').value || '').trim();
+  var err = document.getElementById('lock_err');
+  var btn = document.getElementById('lock_otp_btn');
+  if (!email) { err.textContent = 'Email is required.'; return; }
+  btn.disabled = true; btn.textContent = 'Sending…'; err.textContent = '';
+  function doSend() {
+    if (window._sendOtpLink) {
+      window._sendOtpLink(email).then(function(res) {
+        btn.disabled = false; btn.textContent = '📧 Send Sign-In Link';
+        if (res.ok) {
+          document.getElementById('lock_otp_sent').style.display = 'block';
+          btn.style.display = 'none';
+        } else {
+          err.textContent = res.msg || 'Failed to send link.';
+        }
+      });
+    } else { setTimeout(doSend, 300); }
+  }
+  doSend();
+}
 function journalSignOut() {
   if (!confirm('Sign out of ASURA Journal?')) return;
   if (window._journalSignOut) window._journalSignOut();
 }
-
 function checkLock() {
   // Firebase onAuthStateChanged handles everything — nothing to do here
 }
